@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "preserveConstEnums": true,
+    "outDir": "dist",
+    "noImplicitAny": false,
+    "moduleResolution": "node",
+    "target": "es2018",
+    "module": "CommonJS",
+    "esModuleInterop": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "**/*.spec.ts"]
+}
