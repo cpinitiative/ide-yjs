@@ -26,31 +26,20 @@ const wsReadyStateClosed = 3; // eslint-disable-line
 
 // disable gc when using snapshots!
 const gcEnabled = process.env.GC !== "false" && process.env.GC !== "0";
-let persistenceDir = process.env.YPERSISTENCE;
-/**
- * @type {{bindState: function(string,WSSharedDoc):Promise<any>, writeState:function(string,WSSharedDoc):Promise<any>, provider: any}|null}
- */
-let persistence: any = null;
-if (typeof persistenceDir === "string") {
-  persistenceDir = path.join(__dirname, persistenceDir);
-  console.info('Persisting documents to "' + persistenceDir + '"');
-  // @ts-ignore
-  const LeveldbPersistence = require("y-leveldb").LeveldbPersistence;
-  const ldb = new LeveldbPersistence(persistenceDir);
-  persistence = {
-    provider: ldb,
-    bindState: async (docName, ydoc) => {
-      const persistedYdoc = await ldb.getYDoc(docName);
-      const newUpdates = Y.encodeStateAsUpdate(ydoc);
-      ldb.storeUpdate(docName, newUpdates);
-      Y.applyUpdate(ydoc, Y.encodeStateAsUpdate(persistedYdoc));
-      ydoc.on("update", (update) => {
-        ldb.storeUpdate(docName, update);
-      });
-    },
-    writeState: async (docName, ydoc) => {},
-  };
-}
+import ldb from "./ldb-persistence";
+let persistence = {
+  provider: ldb,
+  bindState: async (docName, ydoc) => {
+    const persistedYdoc = await ldb.getYDoc(docName);
+    const newUpdates = Y.encodeStateAsUpdate(ydoc);
+    ldb.storeUpdate(docName, newUpdates);
+    Y.applyUpdate(ydoc, Y.encodeStateAsUpdate(persistedYdoc));
+    ydoc.on("update", (update) => {
+      ldb.storeUpdate(docName, update);
+    });
+  },
+  writeState: async (docName, ydoc) => {},
+};
 
 /**
  * @param {{bindState: function(string,WSSharedDoc):void,
