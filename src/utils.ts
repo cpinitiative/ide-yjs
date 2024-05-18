@@ -1,4 +1,5 @@
 import path from "path";
+import { dogstatsd } from "./datadog";
 const Y = require("yjs");
 const syncProtocol = require("y-protocols/dist/sync.cjs");
 const awarenessProtocol = require("y-protocols/dist/awareness.cjs");
@@ -61,6 +62,11 @@ exports.getPersistence = () => persistence;
 const docs = new Map();
 // exporting docs so that others can use it
 exports.docs = docs;
+
+// report size of docs map to Datadog once every 2 seconds
+setInterval(() => {
+  dogstatsd.gauge('yjs.doc_map_size', docs.size);
+}, 2000);
 
 const messageSync = 0;
 const messageAwareness = 1;
@@ -224,7 +230,12 @@ const closeConn = (doc, conn) => {
     );
     if (doc.conns.size === 0 && persistence !== null) {
       // if persisted, we store state and destroy ydocument
+      const persistStartTime = Date.now();
       persistence.writeState(doc.name, doc).then(() => {
+        const persistEndTime = Date.now();
+        dogstatsd.histogram('yjs.persist_doc_duration', persistEndTime - persistStartTime);
+        const docSize = Y.encodeStateAsUpdate(doc).byteLength;
+        dogstatsd.histogram('yjs.doc_size', docSize);
         doc.destroy();
       });
       docs.delete(doc.name);
@@ -269,6 +280,9 @@ exports.setupWSConnection = (
   req,
   { docName = req.url.slice(1).split("?")[0], gc = true } = {}
 ) => {
+  dogstatsd.increment("yjs.ws_connection", 1);
+  const requestStartTime = Date.now();
+
   conn.binaryType = "arraybuffer";
   // get doc, initialize if it does not exist yet
   const { doc, docLoadedPromise } = getYDoc(docName, gc);
@@ -344,6 +358,9 @@ exports.setupWSConnection = (
   if (docLoadedPromise) {
     docLoadedPromise.then(() => {
       if (!isConnectionAlive) return;
+      const docLoadedTime = Date.now();
+      const duration = docLoadedTime - requestStartTime;
+      dogstatsd.histogram('yjs.doc_load_time', duration);
 
       isDocLoaded = true;
       queuedMessages!.forEach((message) => messageListener(conn, doc, message));

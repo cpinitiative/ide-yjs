@@ -9,6 +9,7 @@
     "cross-env": "^7.0.3",
     "dotenv": "^16.0.3",
     "express": "^4.18.2",
+    "hot-shots": "^10.0.0",
     "lib0": "^0.2.52",
     "lodash.debounce": "^4.0.8",
     "typescript": "^4.9.5",
