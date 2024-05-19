@@ -233,9 +233,9 @@ const closeConn = (doc, conn) => {
       const persistStartTime = Date.now();
       persistence.writeState(doc.name, doc).then(() => {
         const persistEndTime = Date.now();
-        dogstatsd.histogram('yjs.persist_doc_duration', persistEndTime - persistStartTime);
+        dogstatsd.distribution('yjs.persist_doc_duration', persistEndTime - persistStartTime);
         const docSize = Y.encodeStateAsUpdate(doc).byteLength;
-        dogstatsd.histogram('yjs.doc_size', docSize);
+        dogstatsd.distribution('yjs.doc_size', docSize);
         doc.destroy();
       });
       docs.delete(doc.name);
@@ -360,7 +360,7 @@ exports.setupWSConnection = (
       if (!isConnectionAlive) return;
       const docLoadedTime = Date.now();
       const duration = docLoadedTime - requestStartTime;
-      dogstatsd.histogram('yjs.doc_load_time', duration);
+      dogstatsd.distribution('yjs.doc_load_time', duration);
 
       isDocLoaded = true;
       queuedMessages!.forEach((message) => messageListener(conn, doc, message));
