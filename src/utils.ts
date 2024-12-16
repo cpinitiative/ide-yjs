@@ -28,6 +28,7 @@ const wsReadyStateClosed = 3; // eslint-disable-line
 // disable gc when using snapshots!
 const gcEnabled = process.env.GC !== "false" && process.env.GC !== "0";
 import ldb from "./ldb-persistence";
+import tracer from "./tracer";
 let persistence = {
   provider: ldb,
   bindState: async (docName, ydoc) => {
@@ -65,7 +66,7 @@ exports.docs = docs;
 
 // report size of docs map to Datadog once every 2 seconds
 setInterval(() => {
-  dogstatsd.gauge('yjs.doc_map_size', docs.size);
+  dogstatsd.gauge("yjs.doc_map_size", docs.size);
 }, 2000);
 
 const messageSync = 0;
@@ -233,9 +234,12 @@ const closeConn = (doc, conn) => {
       const persistStartTime = Date.now();
       persistence.writeState(doc.name, doc).then(() => {
         const persistEndTime = Date.now();
-        dogstatsd.distribution('yjs.persist_doc_duration', persistEndTime - persistStartTime);
+        dogstatsd.distribution(
+          "yjs.persist_doc_duration",
+          persistEndTime - persistStartTime
+        );
         const docSize = Y.encodeStateAsUpdate(doc).byteLength;
-        dogstatsd.distribution('yjs.doc_size', docSize);
+        dogstatsd.distribution("yjs.doc_size", docSize);
         doc.destroy();
       });
       docs.delete(doc.name);
@@ -280,92 +284,98 @@ exports.setupWSConnection = (
   req,
   { docName = req.url.slice(1).split("?")[0], gc = true } = {}
 ) => {
-  dogstatsd.increment("yjs.ws_connection", 1);
-  const requestStartTime = Date.now();
+  tracer.trace("ws.connection", { resource: docName }, () => {
+    dogstatsd.increment("yjs.ws_connection", 1);
+    const requestStartTime = Date.now();
 
-  conn.binaryType = "arraybuffer";
-  // get doc, initialize if it does not exist yet
-  const { doc, docLoadedPromise } = getYDoc(docName, gc);
-  doc.conns.set(conn, new Set());
+    conn.binaryType = "arraybuffer";
+    // get doc, initialize if it does not exist yet
+    const { doc, docLoadedPromise } = getYDoc(docName, gc);
+    doc.conns.set(conn, new Set());
 
-  // it might take some time to load the doc from leveldb
-  // but before then we still need to listen for websocket events
-  let isDocLoaded = docLoadedPromise ? false : true;
-  let queuedMessages: Uint8Array[] | null = [];
-  let isConnectionAlive = true;
+    // it might take some time to load the doc from leveldb
+    // but before then we still need to listen for websocket events
+    let isDocLoaded = docLoadedPromise ? false : true;
+    let queuedMessages: Uint8Array[] | null = [];
+    let isConnectionAlive = true;
 
-  // listen and reply to events
-  conn.on(
-    "message",
-    /** @param {ArrayBuffer} message */ (message) => {
-      if (isDocLoaded) messageListener(conn, doc, new Uint8Array(message));
-      else queuedMessages!.push(new Uint8Array(message));
-    }
-  );
-
-  // Check if connection is still alive
-  let pongReceived = true;
-  const pingInterval = setInterval(() => {
-    if (!pongReceived) {
-      if (doc.conns.has(conn)) {
-        closeConn(doc, conn);
-        isConnectionAlive = false;
+    // listen and reply to events
+    conn.on(
+      "message",
+      /** @param {ArrayBuffer} message */ (message) => {
+        if (isDocLoaded) messageListener(conn, doc, new Uint8Array(message));
+        else queuedMessages!.push(new Uint8Array(message));
       }
-      clearInterval(pingInterval);
-    } else if (doc.conns.has(conn)) {
-      pongReceived = false;
-      try {
-        conn.ping();
-      } catch (e) {
-        closeConn(doc, conn);
-        isConnectionAlive = false;
+    );
+
+    // Check if connection is still alive
+    let pongReceived = true;
+    const pingInterval = setInterval(() => {
+      if (!pongReceived) {
+        if (doc.conns.has(conn)) {
+          closeConn(doc, conn);
+          isConnectionAlive = false;
+        }
         clearInterval(pingInterval);
+      } else if (doc.conns.has(conn)) {
+        pongReceived = false;
+        try {
+          conn.ping();
+        } catch (e) {
+          closeConn(doc, conn);
+          isConnectionAlive = false;
+          clearInterval(pingInterval);
+        }
       }
-    }
-  }, pingTimeout);
-  conn.on("close", () => {
-    closeConn(doc, conn);
-    isConnectionAlive = false;
-    clearInterval(pingInterval);
-  });
-  conn.on("pong", () => {
-    pongReceived = true;
-  });
-
-  // put the following in a variables in a block so the interval handlers don't keep in in
-  // scope
-  const sendSyncStep1 = () => {
-    // send sync step 1
-    const encoder = encoding.createEncoder();
-    encoding.writeVarUint(encoder, messageSync);
-    syncProtocol.writeSyncStep1(encoder, doc);
-    send(doc, conn, encoding.toUint8Array(encoder));
-    const awarenessStates = doc.awareness.getStates();
-    if (awarenessStates.size > 0) {
-      const encoder = encoding.createEncoder();
-      encoding.writeVarUint(encoder, messageAwareness);
-      encoding.writeVarUint8Array(
-        encoder,
-        awarenessProtocol.encodeAwarenessUpdate(
-          doc.awareness,
-          Array.from(awarenessStates.keys())
-        )
-      );
-      send(doc, conn, encoding.toUint8Array(encoder));
-    }
-  };
-
-  if (docLoadedPromise) {
-    docLoadedPromise.then(() => {
-      if (!isConnectionAlive) return;
-      const docLoadedTime = Date.now();
-      const duration = docLoadedTime - requestStartTime;
-      dogstatsd.distribution('yjs.doc_load_time', duration);
-
-      isDocLoaded = true;
-      queuedMessages!.forEach((message) => messageListener(conn, doc, message));
-      queuedMessages = null;
-      sendSyncStep1();
+    }, pingTimeout);
+    conn.on("close", () => {
+      closeConn(doc, conn);
+      isConnectionAlive = false;
+      clearInterval(pingInterval);
     });
-  }
+    conn.on("pong", () => {
+      pongReceived = true;
+    });
+
+    // put the following in a variables in a block so the interval handlers don't keep in in
+    // scope
+    const sendSyncStep1 = () => {
+      // send sync step 1
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, messageSync);
+      syncProtocol.writeSyncStep1(encoder, doc);
+      send(doc, conn, encoding.toUint8Array(encoder));
+      const awarenessStates = doc.awareness.getStates();
+      if (awarenessStates.size > 0) {
+        const encoder = encoding.createEncoder();
+        encoding.writeVarUint(encoder, messageAwareness);
+        encoding.writeVarUint8Array(
+          encoder,
+          awarenessProtocol.encodeAwarenessUpdate(
+            doc.awareness,
+            Array.from(awarenessStates.keys())
+          )
+        );
+        send(doc, conn, encoding.toUint8Array(encoder));
+      }
+    };
+
+    if (docLoadedPromise) {
+      tracer
+        .trace("load_doc", { resource: docName }, () => docLoadedPromise)
+        .then(() => {
+          if (!isConnectionAlive) return;
+          const docLoadedTime = Date.now();
+          const duration = docLoadedTime - requestStartTime;
+          dogstatsd.distribution("yjs.doc_load_time", duration);
+
+          isDocLoaded = true;
+          queuedMessages!.forEach((message) =>
+            messageListener(conn, doc, message)
+          );
+          queuedMessages = null;
+          sendSyncStep1();
+        });
+    }
+  });
 };
