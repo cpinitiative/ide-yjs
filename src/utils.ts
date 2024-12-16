@@ -32,7 +32,13 @@ import tracer from "./tracer";
 let persistence = {
   provider: ldb,
   bindState: async (docName, ydoc) => {
-    const persistedYdoc = await ldb.getYDoc(docName);
+    const persistedYdoc = await tracer.trace(
+      "load_doc",
+      { resource: "doc" },
+      () => {
+        return ldb.getYDoc(docName);
+      }
+    );
     const newUpdates = Y.encodeStateAsUpdate(ydoc);
     ldb.storeUpdate(docName, newUpdates);
     Y.applyUpdate(ydoc, Y.encodeStateAsUpdate(persistedYdoc));
@@ -284,7 +290,7 @@ exports.setupWSConnection = (
   req,
   { docName = req.url.slice(1).split("?")[0], gc = true } = {}
 ) => {
-  tracer.trace("ws.connection", { resource: docName }, () => {
+  tracer.trace("ws.connection", { resource: "doc" }, () => {
     dogstatsd.increment("yjs.ws_connection", 1);
     const requestStartTime = Date.now();
 
@@ -361,8 +367,8 @@ exports.setupWSConnection = (
     };
 
     if (docLoadedPromise) {
-      tracer
-        .trace("load_doc", { resource: docName }, () => docLoadedPromise)
+      return tracer
+        .trace("load_doc", { resource: "doc" }, () => docLoadedPromise)
         .then(() => {
           if (!isConnectionAlive) return;
           const docLoadedTime = Date.now();
