@@ -15,11 +15,9 @@ const real_ldb = new LeveldbPersistence(persistenceDir);
 
 const ldb = {
   getYDoc: async (docName: string) => {
-    console.log("getYDoc", docName);
     return real_ldb.getYDoc(docName);
   },
   storeUpdate: async (docName: string, update: any, doc: any) => {
-    console.log("storeUpdate", docName, update, Y.encodeStateAsUpdate(doc));
     real_ldb.storeUpdate(docName, update);
   },
 };

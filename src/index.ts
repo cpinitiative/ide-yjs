@@ -88,3 +88,8 @@ app.post("/copyFile", (req, res) => {
     return res.status(200).send("OK");
   })();
 });
+
+process.on("exit", () => sqlite_persistence.close());
+process.on("SIGHUP", () => process.exit(128 + 1));
+process.on("SIGINT", () => process.exit(128 + 2));
+process.on("SIGTERM", () => process.exit(128 + 15));

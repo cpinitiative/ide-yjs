@@ -6,6 +6,7 @@
   },
   "dependencies": {
     "@types/node": "^18.14.6",
+    "better-sqlite3": "^11.7.0",
     "cross-env": "^7.0.3",
     "dd-trace": "^5.14.0",
     "dotenv": "^16.0.3",
