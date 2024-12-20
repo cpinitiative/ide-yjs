@@ -1,4 +1,5 @@
 import path from "path";
+import * as Y from "yjs";
 
 let persistenceDir = process.env.YPERSISTENCE;
 
@@ -10,6 +11,17 @@ persistenceDir = path.join(__dirname, persistenceDir);
 console.info('Persisting documents to "' + persistenceDir + '"');
 // @ts-ignore
 const LeveldbPersistence = require("y-leveldb").LeveldbPersistence;
-const ldb = new LeveldbPersistence(persistenceDir);
+const real_ldb = new LeveldbPersistence(persistenceDir);
+
+const ldb = {
+  getYDoc: async (docName: string) => {
+    console.log("getYDoc", docName);
+    return real_ldb.getYDoc(docName);
+  },
+  storeUpdate: async (docName: string, update: any, doc: any) => {
+    console.log("storeUpdate", docName, update, Y.encodeStateAsUpdate(doc));
+    real_ldb.storeUpdate(docName, update);
+  },
+};
 
 export default ldb;

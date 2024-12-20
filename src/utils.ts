@@ -27,41 +27,8 @@ const wsReadyStateClosed = 3; // eslint-disable-line
 
 // disable gc when using snapshots!
 const gcEnabled = process.env.GC !== "false" && process.env.GC !== "0";
-import ldb from "./ldb-persistence";
+import sqlite_persistence from "./sqlite-persistence";
 import tracer from "./tracer";
-let persistence = {
-  provider: ldb,
-  bindState: async (docName, ydoc) => {
-    const persistedYdoc = await tracer.trace(
-      "load_doc",
-      { resource: "doc" },
-      () => {
-        return ldb.getYDoc(docName);
-      }
-    );
-    const newUpdates = Y.encodeStateAsUpdate(ydoc);
-    ldb.storeUpdate(docName, newUpdates);
-    Y.applyUpdate(ydoc, Y.encodeStateAsUpdate(persistedYdoc));
-    ydoc.on("update", (update) => {
-      ldb.storeUpdate(docName, update);
-    });
-  },
-  writeState: async (docName, ydoc) => {},
-};
-
-/**
- * @param {{bindState: function(string,WSSharedDoc):void,
- * writeState:function(string,WSSharedDoc):Promise<any>,provider:any}|null} persistence_
- */
-exports.setPersistence = (persistence_) => {
-  persistence = persistence_;
-};
-
-/**
- * @return {null|{bindState: function(string,WSSharedDoc):void,
- * writeState:function(string,WSSharedDoc):Promise<any>}|null} used persistence layer
- */
-exports.getPersistence = () => persistence;
 
 /**
  * @type {Map<string,WSSharedDoc>}
@@ -78,6 +45,7 @@ setInterval(() => {
 const messageSync = 0;
 const messageAwareness = 1;
 // const messageAuth = 2
+const messageSaved = 100;
 
 /**
  * @param {Uint8Array} update
@@ -150,6 +118,51 @@ class WSSharedDoc extends Y.Doc {
       );
     }
   }
+
+  private throttledPersistDoc: any | null = null;
+
+  bindDocToPersistence = async (docName) => {
+    const persistedYdoc = await tracer.trace(
+      "get_doc",
+      { resource: "doc" },
+      () => {
+        return sqlite_persistence.loadYDoc(docName);
+      }
+    );
+    // const newUpdates = Y.encodeStateAsUpdate(ydoc);
+    // ldb.storeUpdate(docName, newUpdates);
+
+    Y.applyUpdate(this, Y.encodeStateAsUpdate(persistedYdoc));
+
+    // Wait for two seconds of inactivity before persisting
+    // Persist at least every 5 seconds
+    this.throttledPersistDoc = debounce(
+      () => {
+        sqlite_persistence.storeYDoc(docName, this);
+
+        // Send message saying doc was saved
+        this.conns.forEach((_, c) => {
+          send(this, c, new Uint8Array([messageSaved]));
+        });
+      },
+      2000,
+      {
+        maxWait: 5000,
+      }
+    );
+
+    this.on("update", (_update) => {
+      this.throttledPersistDoc();
+    });
+  };
+
+  saveDoc = async () => {
+    if (!this.throttledPersistDoc) {
+      console.error("Called saveDoc before bindDocToPersistence");
+      return;
+    }
+    this.throttledPersistDoc?.flush();
+  };
 }
 
 /**
@@ -171,13 +184,13 @@ const getYDoc = (
   if (doc === undefined) {
     doc = new WSSharedDoc(docname);
     doc.gc = gc;
-    if (persistence !== null) {
-      // we need await here to load the doc from the persisted disk
-      // before syncing the doc to the user
-      docLoadedPromise = persistence.bindState(docname, doc);
-    }
+
+    // we need await here to load the doc from the persisted disk
+    // before syncing the doc to the user
+    docLoadedPromise = doc.bindDocToPersistence(docname);
     docs.set(docname, doc);
   }
+  // todo: I think docLoadedPromise also needs to be put into the docs map
   return { doc, docLoadedPromise };
 };
 
@@ -235,10 +248,10 @@ const closeConn = (doc, conn) => {
       Array.from(controlledIds),
       null
     );
-    if (doc.conns.size === 0 && persistence !== null) {
+    if (doc.conns.size === 0) {
       // if persisted, we store state and destroy ydocument
       const persistStartTime = Date.now();
-      persistence.writeState(doc.name, doc).then(() => {
+      doc.saveDoc().then(() => {
         const persistEndTime = Date.now();
         dogstatsd.distribution(
           "yjs.persist_doc_duration",
@@ -290,7 +303,7 @@ exports.setupWSConnection = (
   req,
   { docName = req.url.slice(1).split("?")[0], gc = true } = {}
 ) => {
-  tracer.trace("ws.connection", { resource: "doc" }, () => {
+  tracer.trace("ws.connection", { resource: docName }, () => {
     dogstatsd.increment("yjs.ws_connection", 1);
     const requestStartTime = Date.now();
 
@@ -383,5 +396,6 @@ exports.setupWSConnection = (
           sendSyncStep1();
         });
     }
+    // todo: else we should still send sync step 1
   });
 };
