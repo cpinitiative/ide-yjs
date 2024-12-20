@@ -1,7 +1,6 @@
 import * as Y from "yjs";
 import path from "path";
 import ldb from "./ldb-persistence";
-import { dogstatsd } from "./datadog";
 import tracer from "./tracer";
 
 const db = require("better-sqlite3")(path.join(__dirname, "../yjs.db"));
@@ -38,22 +37,9 @@ const sqlite_persistence = {
       return ydoc;
     });
   },
-  storeYDoc: async (docName: string, ydoc: any) => {
-    const requestStartTime = Date.now();
-
-    await tracer.trace("store_y_doc", { resource: docName }, async () => {
-      const update = await tracer.trace(
-        "encode_state",
-        { resource: docName },
-        () => Y.encodeStateAsUpdate(ydoc)
-      );
-      await tracer.trace("save_to_sqlite", { resource: docName }, () =>
-        insertStmt.run(docName, update)
-      );
-    });
-
-    const duration = Date.now() - requestStartTime;
-    dogstatsd.distribution("yjs.store_doc_time", duration);
+  // ydoc_state is Y.encodeStateAsUpdate(ydoc)
+  storeYDoc: async (docName: string, ydoc_state: any) => {
+    insertStmt.run(docName, ydoc_state);
   },
   close: () => {
     db.close();

@@ -25,6 +25,10 @@ const wsReadyStateOpen = 1;
 const wsReadyStateClosing = 2; // eslint-disable-line
 const wsReadyStateClosed = 3; // eslint-disable-line
 
+// Store at most 10MB of updates in SQLite.
+// This is roughly 7MB of text.
+const MAX_DOC_SIZE = 1024 * 1024 * 10;
+
 // disable gc when using snapshots!
 const gcEnabled = process.env.GC !== "false" && process.env.GC !== "0";
 import sqlite_persistence from "./sqlite-persistence";
@@ -168,12 +172,34 @@ class WSSharedDoc extends Y.Doc {
       return;
     }
 
-    await sqlite_persistence.storeYDoc(this.name, this);
+    const requestStartTime = Date.now();
 
-    // Send message saying doc was saved
-    this.conns.forEach((_, c) => {
-      send(this, c, new Uint8Array([messageSaved]));
+    await tracer.trace("store_y_doc", { resource: this.name }, async () => {
+      const update = await tracer.trace(
+        "encode_state",
+        { resource: this.name },
+        () => Y.encodeStateAsUpdate(this)
+      );
+      if (update.byteLength > MAX_DOC_SIZE) {
+        console.warn(
+          "Doc size is too large (" +
+            update.byteLength +
+            " bytes), skipping persistence"
+        );
+        return;
+      }
+      await tracer.trace("save_to_sqlite", { resource: this.name }, () =>
+        sqlite_persistence.storeYDoc(this.name, update)
+      );
+
+      // Send message saying doc was saved
+      this.conns.forEach((_, c) => {
+        send(this, c, new Uint8Array([messageSaved]));
+      });
     });
+
+    const duration = Date.now() - requestStartTime;
+    dogstatsd.distribution("yjs.store_doc_time", duration);
   };
 }
 
