@@ -61,6 +61,8 @@ const updateHandler = (update, origin, doc) => {
 };
 
 class WSSharedDoc extends Y.Doc {
+  public readonly whenInitialized: Promise<any>;
+
   /**
    * @param {string} name
    */
@@ -117,33 +119,38 @@ class WSSharedDoc extends Y.Doc {
         })
       );
     }
+
+    this.whenInitialized = this.bindDocToPersistence(name);
   }
 
   private throttledPersistDoc: any | null = null;
+  private isDocLoadedFromPersistence: boolean = false;
+  private bindDocToPersistence = async (docName) => {
+    const requestStartTime = Date.now();
 
-  bindDocToPersistence = async (docName) => {
     const persistedYdoc = await tracer.trace(
-      "get_doc",
-      { resource: "doc" },
+      "load_doc",
+      { resource: docName },
       () => {
         return sqlite_persistence.loadYDoc(docName);
       }
     );
+
+    const docLoadedTime = Date.now();
+    const duration = docLoadedTime - requestStartTime;
+    dogstatsd.distribution("yjs.doc_load_time", duration);
+
     // const newUpdates = Y.encodeStateAsUpdate(ydoc);
     // ldb.storeUpdate(docName, newUpdates);
 
     Y.applyUpdate(this, Y.encodeStateAsUpdate(persistedYdoc));
+    this.isDocLoadedFromPersistence = true;
 
     // Wait for two seconds of inactivity before persisting
     // Persist at least every 5 seconds
     this.throttledPersistDoc = debounce(
       () => {
-        sqlite_persistence.storeYDoc(docName, this);
-
-        // Send message saying doc was saved
-        this.conns.forEach((_, c) => {
-          send(this, c, new Uint8Array([messageSaved]));
-        });
+        this.saveDoc();
       },
       2000,
       {
@@ -157,11 +164,16 @@ class WSSharedDoc extends Y.Doc {
   };
 
   saveDoc = async () => {
-    if (!this.throttledPersistDoc) {
-      console.error("Called saveDoc before bindDocToPersistence");
+    if (!this.isDocLoadedFromPersistence) {
       return;
     }
-    this.throttledPersistDoc?.flush();
+
+    await sqlite_persistence.storeYDoc(this.name, this);
+
+    // Send message saying doc was saved
+    this.conns.forEach((_, c) => {
+      send(this, c, new Uint8Array([messageSaved]));
+    });
   };
 }
 
@@ -170,28 +182,16 @@ class WSSharedDoc extends Y.Doc {
  *
  * @param {string} docname - the name of the Y.Doc to find or create
  * @param {boolean} gc - whether to allow gc on the doc (applies only when created)
- * @return {doc: WSSharedDoc, docLoadedPromise: Promise<any>|null} docLoadedPromise resolves then leveldb loaded the doc
+ * @return {WSSharedDoc} doc
  */
-const getYDoc = (
-  docname,
-  gc = true
-): {
-  doc: WSSharedDoc;
-  docLoadedPromise: Promise<any> | null;
-} => {
+const getYDoc = (docname, gc = true): WSSharedDoc => {
   let doc = docs.get(docname);
-  let docLoadedPromise = null;
   if (doc === undefined) {
     doc = new WSSharedDoc(docname);
     doc.gc = gc;
-
-    // we need await here to load the doc from the persisted disk
-    // before syncing the doc to the user
-    docLoadedPromise = doc.bindDocToPersistence(docname);
     docs.set(docname, doc);
   }
-  // todo: I think docLoadedPromise also needs to be put into the docs map
-  return { doc, docLoadedPromise };
+  return doc;
 };
 
 /**
@@ -305,16 +305,15 @@ exports.setupWSConnection = (
 ) => {
   tracer.trace("ws.connection", { resource: docName }, () => {
     dogstatsd.increment("yjs.ws_connection", 1);
-    const requestStartTime = Date.now();
 
     conn.binaryType = "arraybuffer";
     // get doc, initialize if it does not exist yet
-    const { doc, docLoadedPromise } = getYDoc(docName, gc);
+    const doc = getYDoc(docName, gc);
     doc.conns.set(conn, new Set());
 
     // it might take some time to load the doc from leveldb
     // but before then we still need to listen for websocket events
-    let isDocLoaded = docLoadedPromise ? false : true;
+    let isDocLoaded = false;
     let queuedMessages: Uint8Array[] | null = [];
     let isConnectionAlive = true;
 
@@ -379,23 +378,13 @@ exports.setupWSConnection = (
       }
     };
 
-    if (docLoadedPromise) {
-      return tracer
-        .trace("load_doc", { resource: "doc" }, () => docLoadedPromise)
-        .then(() => {
-          if (!isConnectionAlive) return;
-          const docLoadedTime = Date.now();
-          const duration = docLoadedTime - requestStartTime;
-          dogstatsd.distribution("yjs.doc_load_time", duration);
+    doc.whenInitialized.then(() => {
+      if (!isConnectionAlive) return;
 
-          isDocLoaded = true;
-          queuedMessages!.forEach((message) =>
-            messageListener(conn, doc, message)
-          );
-          queuedMessages = null;
-          sendSyncStep1();
-        });
-    }
-    // todo: else we should still send sync step 1
+      isDocLoaded = true;
+      queuedMessages!.forEach((message) => messageListener(conn, doc, message));
+      queuedMessages = null;
+      sendSyncStep1();
+    });
   });
 };
