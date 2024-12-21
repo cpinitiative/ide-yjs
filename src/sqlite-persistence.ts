@@ -1,9 +1,12 @@
 import * as Y from "yjs";
+import Database from "better-sqlite3";
 import path from "path";
 import ldb from "./ldb-persistence";
 import tracer from "./tracer";
 
-const db = require("better-sqlite3")(path.join(__dirname, "../yjs.db"));
+const db = new Database(path.join(__dirname, "../yjs.db"));
+
+db.pragma("journal_mode = WAL");
 
 db.exec("CREATE TABLE IF NOT EXISTS files (name TEXT PRIMARY KEY, data BLOB)");
 
