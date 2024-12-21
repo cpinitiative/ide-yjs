@@ -337,7 +337,7 @@ exports.setupWSConnection = (
     const doc = getYDoc(docName, gc);
     doc.conns.set(conn, new Set());
 
-    // it might take some time to load the doc from leveldb
+    // it might take some time to load the doc from sqlite
     // but before then we still need to listen for websocket events
     let isDocLoaded = false;
     let queuedMessages: Uint8Array[] | null = [];
