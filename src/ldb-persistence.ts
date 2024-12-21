@@ -14,6 +14,12 @@ const LeveldbPersistence = require("y-leveldb").LeveldbPersistence;
 const real_ldb = new LeveldbPersistence(persistenceDir);
 
 const ldb = {
+  getLdb: async () => {
+    return real_ldb._transact((db) => db);
+  },
+  getAllDocNames: () => {
+    return real_ldb.getAllDocNames();
+  },
   getYDoc: async (docName: string) => {
     return real_ldb.getYDoc(docName);
   },
