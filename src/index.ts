@@ -7,6 +7,9 @@ dotenv.config({
   path: path.resolve(__dirname, ".env"),
 });
 
+// Set max event emitter listeners
+require("events").EventEmitter.defaultMaxListeners = 100;
+
 import * as WebSocket from "ws";
 import createServer from "./server";
 import sqlite_persistence from "./sqlite-persistence";
