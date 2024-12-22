@@ -85,7 +85,10 @@ app.post("/copyFile", (req, res) => {
       return;
     }
 
-    await sqlite_persistence.storeYDoc(targetFile, sourceDoc);
+    await sqlite_persistence.storeYDoc(
+      targetFile,
+      Y.encodeStateAsUpdate(sourceDoc)
+    );
 
     dogstatsd.increment("yjs.api.copy_file", 1, ["result:ok"]);
     return res.status(200).send("OK");
