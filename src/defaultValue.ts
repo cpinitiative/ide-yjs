@@ -1,3 +1,5 @@
+// given [filename].EXT
+// mapping of EXT to default value
 export default {
   cpp: `// Source: https://usaco.guide/general/io
 
@@ -38,4 +40,5 @@ public class Main {
 a, b, c = map(int, input().split())
 print("The sum of these three numbers is", a + b + c)
 `,
+  input: "1 2 3\n",
 };

@@ -33,7 +33,7 @@ const MAX_DOC_SIZE = 1024 * 1024 * 10;
 const gcEnabled = process.env.GC !== "false" && process.env.GC !== "0";
 import sqlite_persistence from "./sqlite-persistence";
 import tracer from "./tracer";
-import defaultCode from "./defaultCode";
+import defaultValue from "./defaultValue";
 
 /**
  * @type {Map<string,WSSharedDoc>}
@@ -151,9 +151,9 @@ class WSSharedDoc extends Y.Doc {
 
     // Initialize the doc with default code
     if (docName.includes(".")) {
-      const lang = docName.split(".")[1];
-      if (lang in defaultCode) {
-        const initialCode = defaultCode[lang];
+      const extension = docName.split(".")[1];
+      if (extension in defaultValue) {
+        const initialCode = defaultValue[extension];
         if (!this.getMap("isInitialized").get("isInitialized")) {
           const ytext = this.getText("monaco");
           ytext.insert(0, initialCode);
