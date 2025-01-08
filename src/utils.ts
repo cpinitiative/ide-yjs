@@ -391,6 +391,12 @@ exports.setupWSConnection = (
       isConnectionAlive = false;
       clearInterval(pingInterval);
     });
+    conn.on("error", (err) => {
+      console.log("ws error; exiting", err);
+      closeConn(doc, conn);
+      isConnectionAlive = false;
+      clearInterval(pingInterval);
+    });
     conn.on("pong", () => {
       pongReceived = true;
     });
