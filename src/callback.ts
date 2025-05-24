@@ -1,4 +1,5 @@
 import * as http from "http";
+import logger from "./logger";
 
 const CALLBACK_URL = process.env.CALLBACK_URL
   ? new URL(process.env.CALLBACK_URL)
@@ -52,11 +53,11 @@ const callbackRequest = (url, timeout, data) => {
   };
   const req = http.request(options);
   req.on("timeout", () => {
-    console.warn("Callback request timed out.");
+    logger.warn("Callback request timed out.");
     req.abort();
   });
   req.on("error", (e) => {
-    console.error("Callback request error.", e);
+    logger.error("Callback request error.", e);
     req.abort();
   });
   req.write(data);

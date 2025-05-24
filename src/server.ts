@@ -1,6 +1,7 @@
 import * as http from "http";
 import * as https from "https";
 import * as fs from "fs";
+import logger from "./logger";
 
 const host = process.env.HOST || "localhost";
 const port = process.env.PORT || 1234;
@@ -23,7 +24,7 @@ export default function createServer(app) {
 
     server = https.createServer(readCertsSync(), app);
     server.listen(443, () => {
-      console.log(
+      logger.info(
         "https server running on :443. Note that when NODE_ENV is prod, HOST and PORT are ignored"
       );
     });
@@ -40,7 +41,7 @@ export default function createServer(app) {
 
     // @ts-ignore later issue smh
     server.listen(port, host, () => {
-      console.log(`running at '${host}' on port ${port}`);
+      logger.info(`running at '${host}' on port ${port}`);
     });
   }
   return server;

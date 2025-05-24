@@ -14,6 +14,7 @@ import * as WebSocket from "ws";
 import createServer from "./server";
 import sqlite_persistence from "./sqlite-persistence";
 import { dogstatsd } from "./datadog";
+import logger from "./logger";
 const Y = require("yjs");
 const wss = new WebSocket.Server({ noServer: true });
 const setupWSConnection = require("./utils.js").setupWSConnection;
@@ -99,3 +100,6 @@ process.on("exit", () => sqlite_persistence.close());
 process.on("SIGHUP", () => process.exit(128 + 1));
 process.on("SIGINT", () => process.exit(128 + 2));
 process.on("SIGTERM", () => process.exit(128 + 15));
+process.on("uncaughtException", function (err) {
+  logger.error("Caught exception: " + err);
+});

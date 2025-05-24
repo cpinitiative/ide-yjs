@@ -1,4 +1,3 @@
-import path from "path";
 import { dogstatsd } from "./datadog";
 const Y = require("yjs");
 const syncProtocol = require("y-protocols/dist/sync.cjs");
@@ -34,6 +33,7 @@ const gcEnabled = process.env.GC !== "false" && process.env.GC !== "0";
 import sqlite_persistence from "./sqlite-persistence";
 import tracer from "./tracer";
 import defaultValue from "./defaultValue";
+import logger from "./logger";
 
 /**
  * @type {Map<string,WSSharedDoc>}
@@ -195,7 +195,7 @@ class WSSharedDoc extends Y.Doc {
         () => Y.encodeStateAsUpdate(this)
       );
       if (update.byteLength > MAX_DOC_SIZE) {
-        console.warn(
+        logger.warn(
           "Doc size is too large (" +
             update.byteLength +
             " bytes), skipping persistence"
@@ -266,7 +266,7 @@ const messageListener = (conn, doc, message) => {
       }
     }
   } catch (err) {
-    console.error(err);
+    logger.error(err);
     doc.emit("error", [err]);
   }
 };
@@ -392,7 +392,7 @@ exports.setupWSConnection = (
       clearInterval(pingInterval);
     });
     conn.on("error", (err) => {
-      console.log("ws error; exiting", err);
+      logger.error("ws error; exiting", err);
       closeConn(doc, conn);
       isConnectionAlive = false;
       clearInterval(pingInterval);
