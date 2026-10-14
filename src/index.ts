@@ -17,7 +17,7 @@ import { dogstatsd } from "./datadog";
 import logger from "./logger";
 const Y = require("yjs");
 const wss = new WebSocket.Server({ noServer: true });
-const setupWSConnection = require("./utils.js").setupWSConnection;
+const { setupWSConnection, saveAllDocsSync } = require("./utils.js");
 
 const app = express();
 app.use(express.json());
@@ -96,10 +96,18 @@ app.post("/copyFile", (req, res) => {
   })();
 });
 
+// Save open docs before exiting, so restarts (including PM2's
+// max_memory_restart) don't lose the last few seconds of edits.
+const shutdown = (signal: string, code: number) => {
+  const saved = saveAllDocsSync();
+  logger.info(`Received ${signal}, saved ${saved} open docs, exiting`);
+  process.exit(code);
+};
+
 process.on("exit", () => sqlite_persistence.close());
-process.on("SIGHUP", () => process.exit(128 + 1));
-process.on("SIGINT", () => process.exit(128 + 2));
-process.on("SIGTERM", () => process.exit(128 + 15));
+process.on("SIGHUP", () => shutdown("SIGHUP", 128 + 1));
+process.on("SIGINT", () => shutdown("SIGINT", 128 + 2));
+process.on("SIGTERM", () => shutdown("SIGTERM", 128 + 15));
 process.on("uncaughtException", function (err) {
   logger.error("Caught exception: " + err);
 });

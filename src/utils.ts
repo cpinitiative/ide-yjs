@@ -42,9 +42,12 @@ const docs = new Map();
 // exporting docs so that others can use it
 exports.docs = docs;
 
-// report size of docs map to Datadog once every 2 seconds
+// report size of docs map and process memory to Datadog once every 2 seconds
 setInterval(() => {
   dogstatsd.gauge("yjs.doc_map_size", docs.size);
+  const mem = process.memoryUsage();
+  dogstatsd.gauge("yjs.memory.rss", mem.rss);
+  dogstatsd.gauge("yjs.memory.heap_used", mem.heapUsed);
 }, 2000);
 
 const messageSync = 0;
@@ -168,7 +171,10 @@ class WSSharedDoc extends Y.Doc {
     // Persist at least every 5 seconds
     this.throttledPersistDoc = debounce(
       () => {
-        this.saveDoc();
+        this.saveDoc().catch((err) => {
+          dogstatsd.increment("yjs.persist_doc_error", 1);
+          logger.error("Failed to persist doc " + this.name, err);
+        });
       },
       2000,
       {
@@ -215,7 +221,39 @@ class WSSharedDoc extends Y.Doc {
     const duration = Date.now() - requestStartTime;
     dogstatsd.distribution("yjs.store_doc_time", duration);
   };
+
+  /**
+   * Synchronously persists the doc. Used on shutdown, when there's no time to
+   * wait for the debounced save.
+   */
+  saveDocSync = () => {
+    if (!this.isDocLoadedFromPersistence) {
+      return;
+    }
+    const update = Y.encodeStateAsUpdate(this);
+    if (update.byteLength > MAX_DOC_SIZE) {
+      return;
+    }
+    sqlite_persistence.storeYDocSync(this.name, update);
+  };
 }
+
+/**
+ * Saves every open doc. Call this before the process exits so restarts don't
+ * lose the last few seconds of edits.
+ */
+exports.saveAllDocsSync = () => {
+  let saved = 0;
+  docs.forEach((doc) => {
+    try {
+      doc.saveDocSync();
+      saved++;
+    } catch (err) {
+      logger.error("Failed to persist doc " + doc.name + " on shutdown", err);
+    }
+  });
+  return saved;
+};
 
 /**
  * Gets a Y.Doc by name, whether in memory or on disk
@@ -291,16 +329,27 @@ const closeConn = (doc, conn) => {
     if (doc.conns.size === 0) {
       // if persisted, we store state and destroy ydocument
       const persistStartTime = Date.now();
-      doc.saveDoc().then(() => {
-        const persistEndTime = Date.now();
-        dogstatsd.distribution(
-          "yjs.persist_doc_duration",
-          persistEndTime - persistStartTime
-        );
-        const docSize = Y.encodeStateAsUpdate(doc).byteLength;
-        dogstatsd.distribution("yjs.doc_size", docSize);
-        doc.destroy();
-      });
+      doc
+        .saveDoc()
+        .then(() => {
+          const persistEndTime = Date.now();
+          dogstatsd.distribution(
+            "yjs.persist_doc_duration",
+            persistEndTime - persistStartTime
+          );
+          const docSize = Y.encodeStateAsUpdate(doc).byteLength;
+          dogstatsd.distribution("yjs.doc_size", docSize);
+        })
+        .catch((err) => {
+          dogstatsd.increment("yjs.persist_doc_error", 1);
+          logger.error("Failed to persist doc " + doc.name + " on close", err);
+        })
+        .finally(() => {
+          // Always destroy the doc, even if saving failed. The awareness
+          // instance keeps a setInterval alive until the doc is destroyed, so
+          // skipping this keeps the whole doc in memory forever.
+          doc.destroy();
+        });
       docs.delete(doc.name);
     }
   }
@@ -424,13 +473,24 @@ exports.setupWSConnection = (
       }
     };
 
-    doc.whenInitialized.then(() => {
-      if (!isConnectionAlive) return;
+    doc.whenInitialized.then(
+      () => {
+        if (!isConnectionAlive) return;
 
-      isDocLoaded = true;
-      queuedMessages!.forEach((message) => messageListener(conn, doc, message));
-      queuedMessages = null;
-      sendSyncStep1();
-    });
+        isDocLoaded = true;
+        queuedMessages!.forEach((message) =>
+          messageListener(conn, doc, message)
+        );
+        queuedMessages = null;
+        sendSyncStep1();
+      },
+      (err) => {
+        // Without this the connection hangs forever, queueing every message
+        logger.error("Failed to load doc " + docName, err);
+        closeConn(doc, conn);
+        isConnectionAlive = false;
+        clearInterval(pingInterval);
+      }
+    );
   });
 };
