@@ -42,7 +42,8 @@ app.get("/", (req, res) => {
 
 app.post("/copyFile", (req, res) => {
   (async () => {
-    const { sourceFile, targetFile, securityKey } = req.body;
+    // Express 5 leaves req.body undefined when the request isn't JSON
+    const { sourceFile, targetFile, securityKey } = req.body ?? {};
     if (
       securityKey !== process.env.SECURITY_KEY &&
       process.env.NODE_ENV === "production"
@@ -52,7 +53,7 @@ app.post("/copyFile", (req, res) => {
       return;
     }
 
-    if (!sourceFile.match(/^[a-zA-Z0-9_\-\.]+$/)) {
+    if (typeof sourceFile !== "string" || !sourceFile.match(/^[a-zA-Z0-9_\-\.]+$/)) {
       dogstatsd.increment("yjs.api.copy_file", 1, [
         "result:invalid-source-file-name",
       ]);
@@ -60,7 +61,7 @@ app.post("/copyFile", (req, res) => {
       return;
     }
 
-    if (!targetFile.match(/^[a-zA-Z0-9_\-\.]+$/)) {
+    if (typeof targetFile !== "string" || !targetFile.match(/^[a-zA-Z0-9_\-\.]+$/)) {
       dogstatsd.increment("yjs.api.copy_file", 1, [
         "result:invalid-target-file-name",
       ]);
