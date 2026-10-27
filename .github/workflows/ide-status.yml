@@ -1,0 +1,46 @@
+# Read-only health report for the IDE server: Node and PM2 versions, PM2 app
+# status, memory, disk, the TLS certificate and a redacted summary of recent
+# errors. Changes nothing on the VM. See DEPLOYING.md for setup.
+name: IDE server status
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  status:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # Holds the SSH secrets. Restrict it to the main branch so a workflow on
+    # any other branch can't read them.
+    environment: ide-status
+    env:
+      HEALTH_HOST: yjs.usaco.guide
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Report from the VM
+        env:
+          IDE_SSH_HOST: ${{ secrets.IDE_SSH_HOST }}
+          IDE_SSH_USER: ${{ secrets.IDE_SSH_USER }}
+          IDE_SSH_PRIVATE_KEY: ${{ secrets.IDE_SSH_PRIVATE_KEY }}
+          IDE_SSH_KNOWN_HOSTS: ${{ secrets.IDE_SSH_KNOWN_HOSTS }}
+          IDE_SSH_PORT: ${{ vars.IDE_SSH_PORT }}
+          IDE_APP_DIR: ${{ vars.IDE_APP_DIR }}
+        run: |
+          if ! [[ $IDE_APP_DIR =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+            echo "::error::Set the IDE_APP_DIR variable to the server's checkout on the VM, like /home/azureuser/ide-yjs"
+            exit 1
+          fi
+          scripts/remote/run-on-vm.sh scripts/remote/status.sh "$IDE_APP_DIR" "$HEALTH_HOST"
+
+      - name: Check the public endpoint
+        if: always()
+        run: |
+          body=$(curl -fsS --max-time 10 "https://$HEALTH_HOST/")
+          echo "https://$HEALTH_HOST/ answered: $body"
+          [ "$body" = "Hello!" ]
