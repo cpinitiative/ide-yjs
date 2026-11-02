@@ -59,7 +59,7 @@ const makeSandbox = () => {
   return dir;
 };
 
-const startServer = async (dir, port) => {
+const startServer = async (dir, port, extraEnv = {}) => {
   const child = spawn(process.execPath, [path.join(dir, "dist/index.js")], {
     cwd: dir,
     env: {
@@ -68,6 +68,7 @@ const startServer = async (dir, port) => {
       HOST: "127.0.0.1",
       PORT: String(port),
       DD_TRACE_ENABLED: "false",
+      ...extraEnv,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -211,6 +212,40 @@ test("server syncs, persists and copies docs", async (t) => {
     "copied doc to match"
   );
   await close(d);
+
+  assert.ok(server.exitCode === null, "server crashed:\n" + server.output());
+});
+
+// Production runs behind Caddy: plain http on HOST/PORT, no certificate
+// files, and websockets still sync.
+test("production mode serves plain http on HOST/PORT", async (t) => {
+  const dir = makeSandbox();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const port = await getFreePort();
+
+  const server = await startServer(dir, port, {
+    NODE_ENV: "production",
+    SECURITY_KEY: "test-key",
+  });
+  t.after(() => stopServer(server));
+
+  const a = await connect(port, "prod.cpp");
+  const b = await connect(port, "prod.cpp");
+  a.doc.getText("monaco").insert(0, "// prod\n");
+  await waitFor(
+    () => b.doc.getText("monaco").toString().startsWith("// prod\n"),
+    "edit to reach client b"
+  );
+  await close(a);
+  await close(b);
+
+  // /copyFile needs the security key in production
+  const res = await fetch(`http://127.0.0.1:${port}/copyFile`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sourceFile: "prod.cpp", targetFile: "p2.cpp" }),
+  });
+  assert.strictEqual(res.status, 401);
 
   assert.ok(server.exitCode === null, "server crashed:\n" + server.output());
 });

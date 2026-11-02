@@ -1,0 +1,14 @@
+# Caddy config for the IDE's Yjs server. Install as /etc/caddy/Caddyfile.
+#
+# Caddy gets and renews the Let's Encrypt certificate for yjs.usaco.guide on
+# its own (it needs 443, and ideally 80, open to the internet), redirects
+# http to https, and proxies everything to the Node app on localhost.
+# Websocket upgrades are proxied automatically.
+
+yjs.usaco.guide {
+	reverse_proxy 127.0.0.1:1234 {
+		# When Caddy's config is reloaded, keep open websockets for up to
+		# 5 minutes instead of dropping every editor at once.
+		stream_close_delay 5m
+	}
+}
