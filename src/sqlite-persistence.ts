@@ -33,6 +33,9 @@ const sqlite_persistence = {
   storeYDoc: async (docName: string, ydoc_state: any) => {
     insertStmt.run(docName, ydoc_state);
   },
+  storeYDocSync: (docName: string, ydoc_state: any) => {
+    insertStmt.run(docName, ydoc_state);
+  },
   close: () => {
     db.close();
   },

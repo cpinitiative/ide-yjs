@@ -3,7 +3,11 @@
 `HOST=localhost PORT=1234 YPERSISTENCE=ypersistence node index.js` or something
 
 
-PM2 command: `sudo pm2 start npm -- start`
+PM2 command: `npm run build && sudo pm2 start ecosystem.config.js`
+
+This restarts the server automatically if its memory goes over `max_memory_restart` (default 1G; set `YJS_MAX_MEMORY` to change it). Open docs are saved before each restart.
+
+(Previously: `sudo pm2 start npm -- start`. Running through npm means PM2 only sees npm's memory, so the memory limit wouldn't work.)
 
 ## Datadog
 
