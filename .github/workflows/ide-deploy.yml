@@ -1,0 +1,112 @@
+# Deploys a commit from main to the IDE server, then health-checks it and
+# rolls back automatically if it isn't healthy. Every run waits for a
+# required reviewer to approve it in GitHub first. See DEPLOYING.md for setup.
+name: Deploy IDE server
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit SHA, tag or branch to deploy. It must already be merged into main.
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+# Never run two deploys at once, and never cancel one halfway
+concurrency:
+  group: ide-deploy
+  cancel-in-progress: false
+
+env:
+  HEALTH_HOST: yjs.usaco.guide
+
+jobs:
+  # Builds and tests the commit on a GitHub runner before anything touches
+  # the VM. Holds no secrets.
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      sha: ${{ steps.target.outputs.sha }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve the commit to deploy
+        id: target
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          if ! [[ $REF =~ ^[A-Za-z0-9._/][A-Za-z0-9._/-]*$ ]]; then
+            echo "::error::'$REF' isn't a valid ref"
+            exit 1
+          fi
+          sha=$(git rev-parse --verify --quiet "origin/$REF^{commit}" ||
+            git rev-parse --verify --quiet "$REF^{commit}") || {
+            echo "::error::Couldn't find '$REF'"
+            exit 1
+          }
+          if ! git merge-base --is-ancestor "$sha" origin/main; then
+            echo "::error::$sha isn't merged into main. Only merged code can be deployed."
+            exit 1
+          fi
+          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+          git log -1 --format='Deploying %H%n%s (%an, %cr)' "$sha" | tee -a "$GITHUB_STEP_SUMMARY"
+          git checkout --quiet "$sha"
+          if [ -f .nvmrc ]; then node=$(cat .nvmrc); else node=18; fi
+          echo "node=$node" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: ${{ steps.target.outputs.node }}
+
+      - name: Build and test
+        run: |
+          npm ci --no-audit --no-fund
+          # The build copies .env into dist; the real one only exists on the VM
+          touch .env
+          npm run build
+          if npm run | grep -q '^  test$'; then npm test; else echo "No tests at this commit"; fi
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Holds the SSH secrets and requires a reviewer's approval for every run.
+    # Restrict it to the main branch so a workflow on any other branch can't
+    # read them.
+    environment:
+      name: ide-production
+      url: https://yjs.usaco.guide/
+    steps:
+      # The deploy script always comes from the branch this workflow runs on
+      # (main), whatever commit it deploys
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Deploy on the VM
+        env:
+          IDE_SSH_HOST: ${{ secrets.IDE_SSH_HOST }}
+          IDE_SSH_USER: ${{ secrets.IDE_SSH_USER }}
+          IDE_SSH_PRIVATE_KEY: ${{ secrets.IDE_SSH_PRIVATE_KEY }}
+          IDE_SSH_KNOWN_HOSTS: ${{ secrets.IDE_SSH_KNOWN_HOSTS }}
+          IDE_SSH_PORT: ${{ vars.IDE_SSH_PORT }}
+          IDE_APP_DIR: ${{ vars.IDE_APP_DIR }}
+          SHA: ${{ needs.test.outputs.sha }}
+        run: |
+          if ! [[ $IDE_APP_DIR =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+            echo "::error::Set the IDE_APP_DIR variable to the server's checkout on the VM, like /home/azureuser/ide-yjs"
+            exit 1
+          fi
+          scripts/remote/run-on-vm.sh scripts/remote/deploy.sh "$IDE_APP_DIR" "$SHA" "$HEALTH_HOST"
+
+      - name: Check the public endpoint
+        run: |
+          body=$(curl -fsS --max-time 10 "https://$HEALTH_HOST/")
+          echo "https://$HEALTH_HOST/ answered: $body"
+          [ "$body" = "Hello!" ]
